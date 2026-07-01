@@ -1,0 +1,16 @@
+# Python微调服务依赖
+# QLoRA 4bit微调核心依赖
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# 模型训练（GPU环境安装）
+# torch>=2.1.0
+# transformers>=4.36.0
+# peft>=0.7.0
+# bitsandbytes>=0.42.0
+# accelerate>=0.26.0
+# datasets>=2.15.0
+
+# 已注释的训练依赖在GPU环境取消注释安装：
+# pip install torch transformers peft bitsandbytes accelerate datasets

@@ -1,0 +1,120 @@
+server:
+  port: 8080
+
+# 日志落盘（同时输出到 IDEA 控制台和文件，方便排查）
+logging:
+  file:
+    path: logs
+    name: logs/qa-app.log
+  level:
+    com.test.qa: DEBUG
+
+spring:
+  application:
+    name: ai-java-main
+  profiles:
+    active: dev
+
+  # 异步请求超时 5 分钟（LLM 在 CPU 上推理慢，SSE 流式需要长连接）
+  mvc:
+    async:
+      request-timeout: 600000
+
+  # 数据源
+  datasource:
+    driver-class-name: ${qa.datasource.driver-class-name}
+    url: jdbc:mysql://${qa.datasource.host}:${qa.datasource.port}/${qa.datasource.database}?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${qa.datasource.username}
+    password: ${qa.datasource.password}
+
+  # SpringAI 大模型（通过 Ollama OpenAI 兼容 API）
+  ai:
+    openai:
+      api-key: ollama
+      base-url: ${ollama.chat.url}
+      connect-timeout: 30s
+      read-timeout: 180s
+      chat:
+        options:
+          model: ${ollama.chat.model}
+          temperature: 0.7
+          max-tokens: 512
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+# Ollama 配置（chat + embedding 均在 VM 上）
+# ollama.chat.url / ollama.chat.model / ollama.embedding.url / ollama.embedding.model
+# 定义在 application-dev.yml 中，此处无需重复
+
+# ChromaDB 向量数据库
+chromadb:
+  host: ${qa.chromadb.host}
+  port: ${qa.chromadb.port}
+  collection-name: qa_knowledge_base_v2
+
+# RAG 检索增强配置
+rag:
+  chunk:
+    default-size: 512
+    default-overlap: 64
+    max-size: 4096
+    min-size: 128
+  retrieval:
+    default-top-k: 3
+    max-top-k: 20
+  embedding:
+    model: text-embedding-ada-002
+
+# 自动化评测配置
+evaluation:
+  judge:
+    temperature: 0.1
+  batch:
+    concurrency: 4
+  retrieval:
+    default-top-k: 5
+
+# 消融实验配置
+ablation:
+  max-variable-values: 10
+  max-combinations: 50
+
+# 异步线程池配置
+async:
+  executor:
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 100
+    thread-name-prefix: qa-async-
+
+# 文件上传路径
+file:
+  upload-dir: ${qa.file.upload-dir}
+
+# Python 微调服务
+python-train:
+  base-url: ${qa.python-train.base-url}
+
+# SpringDoc OpenAPI
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  info:
+    title: 企业级AI知识库RAG问答与自动化评测平台
+    version: 1.0.0
+    description: 提示词工程、RAG检索增强、LLM-as-Judge评测、消融实验、微调服务联动

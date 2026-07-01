@@ -1,0 +1,29 @@
+qa:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    host: localhost
+    port: 3306
+    database: qa_platform
+    username: root
+    password: your-mysql-password
+
+  # ChromaDB 向量数据库
+  chromadb:
+    host: localhost
+    port: 8001
+
+  # Python 微调服务
+  python-train:
+    base-url: http://localhost:8002
+
+  # 文件上传路径
+  file:
+    upload-dir: ./uploads
+
+# 对话模型 (Ollama 兼容，替换为你的 Ollama 地址)
+ollama.chat.url: http://localhost:11434
+ollama.chat.model: qwen2.5:7b
+
+# Embedding 模型
+ollama.embedding.url: http://localhost:11434
+ollama.embedding.model: nomic-embed-text

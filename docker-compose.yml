@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # ============================
+  # 基础设施层
+  # ============================
+
+  mysql:
+    image: mysql:8.0
+    container_name: qa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-qa_platform}
+      MYSQL_USER: ${MYSQL_USER:-qa_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-qa_pass123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./ai-java-main/src/main/resources/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: qa-chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMADB_PORT:-8001}:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma-data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ============================
+  # 应用服务层
+  # ============================
+
+  backend:
+    build: ./ai-java-main
+    container_name: qa-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    environment:
+      # 数据库
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-qa_platform}?useUnicode=true&characterEncoding=utf8mb4&serverTimezone=Asia/Shanghai&useSSL=false
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-qa_user}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-qa_pass123}
+      # AI 模型
+      AI_API_KEY: ${AI_API_KEY:-sk-your-api-key-here}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-ada-002}
+      # ChromaDB
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: 8000
+      # Python 微调服务
+      PYTHON_TRAIN_URL: ${PYTHON_TRAIN_URL:-http://python-train:8002}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+
+  frontend:
+    build: ./ai-frontend
+    container_name: qa-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+
+  python-train:
+    build: ./python-train-side
+    container_name: qa-python-train
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    # GPU 支持：取消以下注释并在宿主机安装 nvidia-container-toolkit
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  mysql-data:
+  chroma-data:
