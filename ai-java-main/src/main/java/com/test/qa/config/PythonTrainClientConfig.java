@@ -1,6 +1,7 @@
 package com.test.qa.config;
 
 import io.netty.channel.ChannelOption;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -8,8 +9,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
 
 import java.time.Duration;
 
@@ -26,15 +29,33 @@ import java.time.Duration;
 @Configuration
 public class PythonTrainClientConfig {
 
+    private static final int CONNECT_TIMEOUT_MILLIS = 30_000;
+    private static final int RESPONSE_TIMEOUT_SECONDS = 60;
+    private static final int CONNECTION_POOL_MAX_CONNECTIONS = 50;
+    private static final int CONNECTION_POOL_MAX_IDLE_SECONDS = 60;
+    private static final int CONNECTION_POOL_MAX_LIFETIME_SECONDS = 300;
+
     @Value("${python-train.base-url:http://localhost:8002}")
     private String baseUrl;
+
+    @PostConstruct
+    public void validate() {
+        if (!StringUtils.hasText(baseUrl)) {
+            throw new IllegalStateException("python-train.base-url must not be empty");
+        }
+    }
 
     @Bean
     public WebClient pythonTrainWebClient() {
         log.info("Python Train WebClient initialized: {}", baseUrl);
-        HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 30_000)
-                .responseTimeout(Duration.ofSeconds(60));
+        ConnectionProvider connectionProvider = ConnectionProvider.builder("python-train-pool")
+                .maxConnections(CONNECTION_POOL_MAX_CONNECTIONS)
+                .maxIdleTime(Duration.ofSeconds(CONNECTION_POOL_MAX_IDLE_SECONDS))
+                .maxLifeTime(Duration.ofSeconds(CONNECTION_POOL_MAX_LIFETIME_SECONDS))
+                .build();
+        HttpClient httpClient = HttpClient.create(connectionProvider)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS)
+                .responseTimeout(Duration.ofSeconds(RESPONSE_TIMEOUT_SECONDS));
         return WebClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)

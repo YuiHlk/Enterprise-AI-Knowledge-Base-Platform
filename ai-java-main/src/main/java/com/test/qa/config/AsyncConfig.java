@@ -1,5 +1,6 @@
 package com.test.qa.config;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +27,18 @@ public class AsyncConfig {
 
     @Value("${async.executor.thread-name-prefix:qa-async-}")
     private String threadNamePrefix;
+
+    @PostConstruct
+    public void validate() {
+        if (corePoolSize < 1 || maxPoolSize < 1) {
+            throw new IllegalStateException(
+                    "async.executor pool sizes must be positive: core=" + corePoolSize + " max=" + maxPoolSize);
+        }
+        if (maxPoolSize < corePoolSize) {
+            throw new IllegalStateException(
+                    "async.executor max-pool-size(" + maxPoolSize + ") must be >= core-pool-size(" + corePoolSize + ")");
+        }
+    }
 
     @Bean("taskExecutor")
     public Executor taskExecutor() {
