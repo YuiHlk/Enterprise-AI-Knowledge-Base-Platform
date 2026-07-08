@@ -1,4 +1,4 @@
-# 企业级 AI 知识库 RAG 问答与自动化评测平台
+# 代号QA
 
 基于 Spring Boot + Vue3 的全栈 AI 应用平台，系统覆盖工业级 AI 应用开发全套工程能力：提示词工程、RAG 检索增强生成、LLM-as-Judge 自动化评测、消融实验、模型微调联动。
 
@@ -118,17 +118,6 @@ cd python-train-side && pip install -r requirements.txt && uvicorn main:app --po
 - Java WebClient 调用 Python FastAPI 服务
 - LoRA 超参数可视化配置（Rank、Alpha、学习率、Epoch、BatchSize）
 - 前端自动轮询训练进度（每10秒）
-
-## 开发阶段
-
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| 阶段一 | 后端工程初始化、数据库、Prompt 后端接口、前端框架 | ✅ 完成 |
-| 阶段二 | 完整 RAG 问答链路、知识库与对话前端页面 | ✅ 完成 |
-| 阶段三 | 自动化评测体系、评测可视化前端 | ✅ 完成 |
-| 阶段四 | 消融实验系统 | ✅ 完成 |
-| 阶段五 | Python 微调子服务、Java 对接、前端页面 | ✅ 完成 |
-| 阶段六 | 全局优化、Docker Compose 一键部署、项目总结 | ✅ 完成 |
 
 ## 工程规范
 
