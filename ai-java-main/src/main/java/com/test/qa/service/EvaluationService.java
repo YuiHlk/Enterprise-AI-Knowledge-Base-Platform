@@ -5,10 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.test.qa.domain.PromptTemplate;
 import com.test.qa.domain.QaEvaluationRecord;
 import com.test.qa.domain.QaTestSet;
+import com.test.qa.dto.EvaluationConverter;
+import com.test.qa.dto.EvaluationRecordResponse;
+import com.test.qa.dto.EvaluationTaskDetailResponse;
+import com.test.qa.dto.EvaluationTaskItem;
+import com.test.qa.dto.JudgeResultDTO;
 import com.test.qa.mapper.PromptTemplateMapper;
 import com.test.qa.mapper.QaEvaluationRecordMapper;
 import com.test.qa.mapper.QaTestSetMapper;
-import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -156,7 +160,7 @@ public class EvaluationService {
      * 3. 输出固定JSON格式减少解析歧义
      * 4. 存储原始响应(judgeRawResponse)便于后续分析评分一致性
      */
-    public JudgeResult judge(String question, String referenceAnswer,
+    public JudgeResultDTO judge(String question, String referenceAnswer,
                              String retrievedContext, String modelAnswer) {
         String userPrompt = String.format("""
                         【用户问题】
@@ -188,7 +192,7 @@ public class EvaluationService {
             return parseJudgeResponse(rawJson);
         } catch (Exception e) {
             log.error("LLM-as-Judge评分失败: {}", e.getMessage());
-            JudgeResult fallback = new JudgeResult();
+            JudgeResultDTO fallback = new JudgeResultDTO();
             fallback.setAnswerRelevance(0.0);
             fallback.setContextFaithfulness(0.0);
             fallback.setHallucinationScore(0.0);
@@ -202,8 +206,8 @@ public class EvaluationService {
      * 防御性JSON解析
      * LLM可能返回带有markdown代码块的JSON，需要清理后再解析
      */
-    private JudgeResult parseJudgeResponse(String raw) {
-        JudgeResult result = new JudgeResult();
+    private JudgeResultDTO parseJudgeResponse(String raw) {
+        JudgeResultDTO result = new JudgeResultDTO();
         result.setRawResponse(raw);
 
         String json = raw.trim();
@@ -304,7 +308,7 @@ public class EvaluationService {
             double precision = computeRetrievalPrecision(keywords, retrievedChunks);
 
             // 4. LLM-as-Judge评分
-            JudgeResult judgeResult = judge(
+            JudgeResultDTO judgeResult = judge(
                     question.getQuestion(),
                     question.getReferenceAnswer() != null ? question.getReferenceAnswer() : "无标准答案",
                     context,
@@ -381,14 +385,10 @@ public class EvaluationService {
     /**
      * 获取评测任务汇总统计
      */
-    public Map<String, Object> getTaskSummary(String taskId) {
+    public EvaluationTaskDetailResponse getTaskSummary(String taskId) {
         List<QaEvaluationRecord> records = recordMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QaEvaluationRecord>()
                         .eq(QaEvaluationRecord::getTaskId, taskId));
-
-        if (records.isEmpty()) {
-            return Map.of("taskId", taskId, "total", 0);
-        }
 
         long completed = records.stream().filter(r -> "COMPLETED".equals(r.getStatus())).count();
         long failed = records.stream().filter(r -> "FAILED".equals(r.getStatus())).count();
@@ -414,24 +414,26 @@ public class EvaluationService {
                 .mapToDouble(QaEvaluationRecord::getRetrievalPrecision)
                 .average().orElse(0.0);
 
-        Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("taskId", taskId);
-        summary.put("total", records.size());
-        summary.put("completed", (int) completed);
-        summary.put("failed", (int) failed);
-        summary.put("avgAnswerRelevance", Math.round(avgRelevance * 100.0) / 100.0);
-        summary.put("avgContextFaithfulness", Math.round(avgFaithfulness * 100.0) / 100.0);
-        summary.put("avgHallucinationScore", Math.round(avgHallucination * 100.0) / 100.0);
-        summary.put("avgContextRecall", Math.round(avgRecall * 100.0) / 100.0);
-        summary.put("avgRetrievalPrecision", Math.round(avgPrecision * 100.0) / 100.0);
-        summary.put("records", records);
-        return summary;
+        List<EvaluationRecordResponse> recordResponses = EvaluationConverter.toRecordResponseList(records);
+
+        EvaluationTaskDetailResponse detail = new EvaluationTaskDetailResponse();
+        detail.setTaskId(taskId);
+        detail.setTotal(records.size());
+        detail.setCompleted((int) completed);
+        detail.setFailed((int) failed);
+        detail.setAvgAnswerRelevance(Math.round(avgRelevance * 100.0) / 100.0);
+        detail.setAvgContextFaithfulness(Math.round(avgFaithfulness * 100.0) / 100.0);
+        detail.setAvgHallucinationScore(Math.round(avgHallucination * 100.0) / 100.0);
+        detail.setAvgContextRecall(Math.round(avgRecall * 100.0) / 100.0);
+        detail.setAvgRetrievalPrecision(Math.round(avgPrecision * 100.0) / 100.0);
+        detail.setRecords(recordResponses);
+        return detail;
     }
 
     /**
      * 列出所有评测任务（按task_id分组）
      */
-    public List<Map<String, Object>> listTasks() {
+    public List<EvaluationTaskItem> listTasks() {
         List<QaEvaluationRecord> all = recordMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QaEvaluationRecord>()
                         .orderByDesc(QaEvaluationRecord::getCreateTime));
@@ -440,33 +442,25 @@ public class EvaluationService {
             grouped.computeIfAbsent(r.getTaskId(), k -> new ArrayList<>()).add(r);
         }
 
-        List<Map<String, Object>> tasks = new ArrayList<>();
+        List<EvaluationTaskItem> tasks = new ArrayList<>();
         for (Map.Entry<String, List<QaEvaluationRecord>> entry : grouped.entrySet()) {
             List<QaEvaluationRecord> records = entry.getValue();
             long completed = records.stream().filter(r -> "COMPLETED".equals(r.getStatus())).count();
             long failed = records.stream().filter(r -> "FAILED".equals(r.getStatus())).count();
             long pending = records.stream().filter(r -> "PENDING".equals(r.getStatus())).count();
 
-            // 取最晚的createTime（records已按时间降序排列，第一条即最新）
             LocalDateTime latestTime = records.stream()
                     .map(QaEvaluationRecord::getCreateTime)
                     .filter(Objects::nonNull)
                     .max(LocalDateTime::compareTo)
                     .orElse(null);
 
-            Map<String, Object> task = new LinkedHashMap<>();
-            task.put("taskId", entry.getKey());
-            task.put("total", records.size());
-            task.put("completed", (int) completed);
-            task.put("failed", (int) failed);
-            task.put("pending", (int) pending);
-            task.put("latestTime", latestTime);
-            tasks.add(task);
+            tasks.add(new EvaluationTaskItem(
+                    entry.getKey(), records.size(), (int) completed, (int) failed, (int) pending, latestTime));
         }
-        // 按最新时间降序排列任务列表
         tasks.sort((a, b) -> {
-            LocalDateTime ta = (LocalDateTime) a.get("latestTime");
-            LocalDateTime tb = (LocalDateTime) b.get("latestTime");
+            LocalDateTime ta = a.getLatestTime();
+            LocalDateTime tb = b.getLatestTime();
             if (ta == null && tb == null) return 0;
             if (ta == null) return 1;
             if (tb == null) return -1;
@@ -489,17 +483,5 @@ public class EvaluationService {
         } catch (JsonProcessingException e) {
             return Collections.emptyList();
         }
-    }
-
-    /**
-     * LLM-as-Judge评分结果DTO
-     */
-    @Data
-    public static class JudgeResult {
-        private double answerRelevance;
-        private double contextFaithfulness;
-        private double hallucinationScore;
-        private String reasoning;
-        private String rawResponse;
     }
 }
