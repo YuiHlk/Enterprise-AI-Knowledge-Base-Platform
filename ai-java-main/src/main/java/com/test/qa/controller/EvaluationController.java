@@ -126,4 +126,16 @@ public class EvaluationController {
         }
         return Result.success(EvaluationConverter.toResponse(record));
     }
+
+    @DeleteMapping("/records/{id}")
+    @Operation(summary = "删除单条评测记录")
+    public Result<Void> deleteRecord(
+            @Parameter(description = "记录ID") @PathVariable Long id) {
+        com.test.qa.domain.QaEvaluationRecord record = recordMapper.selectById(id);
+        if (record == null) {
+            return Result.error(404, "评测记录不存在");
+        }
+        recordMapper.deleteById(id);
+        return Result.success(null);
+    }
 }

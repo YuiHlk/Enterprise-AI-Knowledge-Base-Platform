@@ -215,6 +215,15 @@
           <el-table-column label="回答" min-width="250" show-overflow-tooltip>
             <template #default="{ row }">{{ row.modelResponse }}</template>
           </el-table-column>
+          <el-table-column label="操作" width="70" align="center">
+            <template #default="{ row }">
+              <el-popconfirm title="确认删除？" @confirm="handleDeleteRecord(row.id)">
+                <template #reference>
+                  <el-button size="small" type="danger" :icon="Delete" circle />
+                </template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
         </el-table>
       </template>
     </el-dialog>
@@ -227,7 +236,7 @@ import { ElMessage } from 'element-plus'
 import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
 import {
   listTestSets, getQuestions, createQuestions, deleteQuestion,
-  runEvaluation, listTasks, getTaskDetail
+  runEvaluation, listTasks, getTaskDetail, deleteRecord
 } from '../../api/evaluation'
 import { pagePromptTemplates } from '../../api/promptTemplate'
 
@@ -262,6 +271,7 @@ const running = ref(false)
 const promptTemplates = ref([])
 const showTaskDetail = ref(false)
 const taskDetail = ref(null)
+const currentTaskId = ref('')
 
 const runForm = reactive({ setName: '', promptTemplateId: null, topK: 5 })
 
@@ -350,9 +360,18 @@ async function handleRunEval() {
 
 async function viewTaskDetail(taskId) {
   try {
+    currentTaskId.value = taskId
     taskDetail.value = await getTaskDetail(taskId)
     showTaskDetail.value = true
   } catch { ElMessage.error('获取失败') }
+}
+
+async function handleDeleteRecord(id) {
+  try {
+    await deleteRecord(id)
+    ElMessage.success('删除成功')
+    taskDetail.value = await getTaskDetail(currentTaskId.value)
+  } catch { ElMessage.error('删除失败') }
 }
 
 const taskMetrics = computed(() => {

@@ -45,3 +45,8 @@ export function getTaskDetail(taskId) {
 export function getRecord(id) {
   return request.get(`/evaluation/records/${id}`)
 }
+
+// 删除单条评测记录
+export function deleteRecord(id) {
+  return request.delete(`/evaluation/records/${id}`)
+}

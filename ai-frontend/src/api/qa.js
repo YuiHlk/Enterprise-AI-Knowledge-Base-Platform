@@ -84,5 +84,5 @@ export function getChatHistory(sessionId) {
 
 // 删除会话历史
 export function deleteChatHistory(sessionId) {
-  return request.delete('/qa/delete-chat-history', { params: { sessionId } })
+  return request.delete('/qa/chat-history', { params: { sessionId } })
 }

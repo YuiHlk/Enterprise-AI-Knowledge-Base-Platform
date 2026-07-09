@@ -87,7 +87,7 @@ public class QAController {
         return Result.success(chatLogMapper.selectList(wrapper));
     }
 
-    @DeleteMapping("/delete-chat-history")
+    @DeleteMapping("/chat-history")
     @Operation(summary = "删除会话历史")
     public Result<Void> delchatHistory(
             @Parameter(description = "会话ID") @RequestParam String sessionId) {
