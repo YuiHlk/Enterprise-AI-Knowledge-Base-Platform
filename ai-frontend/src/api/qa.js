@@ -81,3 +81,8 @@ export function askQuestionStream({ question, promptTemplateId, documentId, sess
 export function getChatHistory(sessionId) {
   return request.get('/qa/chat-history', { params: { sessionId } })
 }
+
+// 删除会话历史
+export function deleteChatHistory(sessionId) {
+  return request.delete('/qa/delete-chat-history', { params: { sessionId } })
+}

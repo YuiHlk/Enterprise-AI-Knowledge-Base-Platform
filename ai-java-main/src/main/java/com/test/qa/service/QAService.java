@@ -4,15 +4,15 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.test.qa.domain.ChatLog;
 import com.test.qa.domain.PromptTemplate;
+import com.test.qa.dto.QAResult;
 import com.test.qa.mapper.ChatLogMapper;
 import com.test.qa.mapper.PromptTemplateMapper;
 import jakarta.servlet.AsyncContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import reactor.core.scheduler.Schedulers;
 
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -30,8 +30,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class QAService {
+
+    private static final int TOP_K_SMALL = 3;
+    private static final int TOP_K_DEFAULT = 5;
+    private static final int MAX_TOKENS_THRESHOLD = 2048;
+    private static final int LOG_QUESTION_MAX_LEN = 50;
 
     private final RetrievalService retrievalService;
     private final PromptRenderService promptRenderService;
@@ -40,6 +44,23 @@ public class QAService {
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
     private final Executor taskExecutor;
+
+    public QAService(RetrievalService retrievalService, PromptRenderService promptRenderService,
+                     PromptTemplateMapper promptTemplateMapper, ChatLogMapper chatLogMapper,
+                     ChatClient chatClient, ObjectMapper objectMapper,
+                     @Qualifier("taskExecutor") Executor taskExecutor) {
+        this.retrievalService = retrievalService;
+        this.promptRenderService = promptRenderService;
+        this.promptTemplateMapper = promptTemplateMapper;
+        this.chatLogMapper = chatLogMapper;
+        this.chatClient = chatClient;
+        this.objectMapper = objectMapper;
+        this.taskExecutor = taskExecutor;
+    }
+
+    // ================================================================
+    // 公共 API
+    // ================================================================
 
     /**
      * RAG 问答
@@ -51,63 +72,40 @@ public class QAService {
      * @return 问答结果
      */
     public QAResult ask(String question, Long promptTemplateId, Long documentId, String sessionId) {
-        long t0 = System.currentTimeMillis();
+        long t0 = System.currentTimeMillis(); //初加载
 
-        // 1. 获取提示词模板
-        PromptTemplate template = promptTemplateMapper.selectById(promptTemplateId);
-        if (template == null) {
-            throw new IllegalArgumentException("提示词模板不存在: id=" + promptTemplateId);
-        }
-        long t1 = System.currentTimeMillis();
+        PromptTemplate template = loadTemplate(promptTemplateId);
+        long t1 = System.currentTimeMillis(); //加载提示词模板
 
-        // 2. 向量检索
-        int topK = template.getMaxTokens() != null && template.getMaxTokens() < 2048 ? 3 : 5;
+        int topK = resolveTopK(template);
         List<String> retrievedChunks = retrievalService.retrieve(question, documentId, topK);
         String context = String.join("\n\n---\n\n", retrievedChunks);
-        long t2 = System.currentTimeMillis();
+        long t2 = System.currentTimeMillis(); //向量库检索分片
 
-        // 3. Prompt 渲染：将 {{question}} 和 {{context}} 替换到模板中
-        Map<String, String> variables = new LinkedHashMap<>();
-        variables.put("question", question);
-        variables.put("context", context);
-        String fullPrompt = promptRenderService.render(template.getUserTemplate(), variables);
-        long t3 = System.currentTimeMillis();
+        String fullPrompt = promptRenderService.render(template.getUserTemplate(), buildVariables(question, context));
+        long t3 = System.currentTimeMillis(); //模板变量渲染
 
-        // 4. 构建系统 + 用户消息，调用大模型
-        String systemPrompt = template.getSystemPrompt();
         ChatResponse chatResponse = chatClient.prompt()
-                .system(systemPrompt)
+                .system(template.getSystemPrompt())
                 .user(fullPrompt)
                 .call()
                 .chatResponse();
-        String answer = chatResponse != null && chatResponse.getResult() != null
-                ? chatResponse.getResult().getOutput().getText()
-                : "模型未返回有效回答";
-        long t4 = System.currentTimeMillis();
+        String answer = extractAnswer(chatResponse);
+        long t4 = System.currentTimeMillis(); //大模型远程调用
 
         long latency = t4 - t0;
+        String sid = resolveSessionId(sessionId);
+        int tokens = estimateTokens(chatResponse);
 
-        // 5. 对话日志持久化
-        String sid = (sessionId != null && !sessionId.isEmpty()) ? sessionId : UUID.randomUUID().toString();
-        ChatLog logEntry = new ChatLog();
-        logEntry.setSessionId(sid);
-        logEntry.setPromptTemplateId(promptTemplateId);
-        logEntry.setRagDocumentId(documentId);
-        logEntry.setUserQuestion(question);
-        logEntry.setRetrievedChunks(retrievalService.chunksToJson(retrievedChunks));
-        logEntry.setFullPrompt(fullPrompt);
-        logEntry.setModelResponse(answer);
-        logEntry.setLatencyMs(latency);
-        logEntry.setTotalTokens(chatResponse != null && chatResponse.getMetadata() != null
-                ? estimateTokens(chatResponse) : 0);
+        ChatLog logEntry = buildChatLog(sid, question, promptTemplateId, documentId,
+                retrievedChunks, fullPrompt, answer, latency, tokens);
         chatLogMapper.insert(logEntry);
 
-        log.info("RAG问答完成: sessionId={}, question='{}', total={}ms | " +
-                        "取模板={}ms, 向量检索={}ms, 渲染={}ms, LLM调用={}ms, chunks={}",
-                sid, question.substring(0, Math.min(50, question.length())), latency,
+        log.info("RAG问答完成: sessionId={}, question='{}', total={}ms | "
+                        + "取模板={}ms, 向量检索={}ms, 渲染={}ms, LLM调用={}ms, chunks={}",
+                sid, truncateQuestion(question), latency,
                 t1 - t0, t2 - t1, t3 - t2, t4 - t3, retrievedChunks.size());
 
-        // 6. 构建返回结果
         QAResult result = new QAResult();
         result.setAnswer(answer);
         result.setSessionId(sid);
@@ -125,8 +123,6 @@ public class QAService {
     public void askStream(String question, Long promptTemplateId, Long documentId, String sessionId,
                           OutputStream out, AsyncContext asyncContext) {
         taskExecutor.execute(() -> {
-            // 确保 asyncContext.complete() 最多调用一次，避免 Reactor
-            // doOnComplete/doOnError/blockLast 异常导致的重复完成
             AtomicBoolean completed = new AtomicBoolean(false);
             Runnable safeComplete = () -> {
                 if (completed.compareAndSet(false, true)) {
@@ -137,39 +133,24 @@ public class QAService {
             try {
                 long t0 = System.currentTimeMillis();
 
-                // 1. 获取提示词模板
-                PromptTemplate template = promptTemplateMapper.selectById(promptTemplateId);
-                if (template == null) {
-                    writeSse(out, "error", "提示词模板不存在: id=" + promptTemplateId);
-                    safeComplete.run();
-                    return;
-                }
+                PromptTemplate template = loadTemplate(promptTemplateId);
                 long t1 = System.currentTimeMillis();
 
-                // 2. 向量检索
-                int topK = template.getMaxTokens() != null && template.getMaxTokens() < 2048 ? 3 : 5;
+                int topK = resolveTopK(template);
                 List<String> retrievedChunks = retrievalService.retrieve(question, documentId, topK);
                 String context = String.join("\n\n---\n\n", retrievedChunks);
                 long t2 = System.currentTimeMillis();
 
-                // 3. Prompt 渲染
-                Map<String, String> variables = new LinkedHashMap<>();
-                variables.put("question", question);
-                variables.put("context", context);
-                String fullPrompt = promptRenderService.render(template.getUserTemplate(), variables);
+                String fullPrompt = promptRenderService.render(template.getUserTemplate(),
+                        buildVariables(question, context));
                 String systemPrompt = template.getSystemPrompt();
                 long t3 = System.currentTimeMillis();
 
-                String sid = (sessionId != null && !sessionId.isEmpty()) ? sessionId : UUID.randomUUID().toString();
+                String sid = resolveSessionId(sessionId);
 
-                // 推送 meta 事件（包含来源片段供前端展示）
-                try {
-                    String metaJson = objectMapper.writeValueAsString(
-                            Map.of("sessionId", sid, "retrievalMs", t3 - t0, "sources", retrievedChunks));
-                    writeSse(out, "meta", metaJson);
-                } catch (Exception ignored) {}
+                writeMeta(out, sid, t3 - t0, retrievedChunks);
 
-                // 4. 流式调用 LLM，逐 token 写到 response
+                // 流式调用 LLM，逐 token 写到 response
                 StringBuilder answerBuf = new StringBuilder();
                 long t4 = System.currentTimeMillis();
                 chatClient.prompt()
@@ -177,10 +158,8 @@ public class QAService {
                         .user(fullPrompt)
                         .stream()
                         .chatResponse()
-                        .publishOn(Schedulers.boundedElastic())
                         .doOnNext(cr -> {
-                            String token = cr.getResult() != null && cr.getResult().getOutput() != null
-                                    ? cr.getResult().getOutput().getText() : "";
+                            String token = extractToken(cr);
                             if (!token.isEmpty()) {
                                 answerBuf.append(token);
                                 writeSse(out, "token", token);
@@ -188,12 +167,13 @@ public class QAService {
                         })
                         .doOnComplete(() -> {
                             long latency = System.currentTimeMillis() - t0;
+                            String answer = answerBuf.toString();
                             writeSse(out, "done", "{\"latencyMs\":" + latency + "}");
                             persistLog(sid, question, promptTemplateId, documentId,
-                                    retrievedChunks, fullPrompt, answerBuf.toString(), latency);
+                                    retrievedChunks, fullPrompt, answer, latency);
                             log.info("RAG流式问答完成: sessionId={}, question='{}', total={}ms | "
                                             + "取模板={}ms, 向量检索={}ms, 渲染={}ms, LLM流式={}ms, chunks={}",
-                                    sid, question.substring(0, Math.min(50, question.length())), latency,
+                                    sid, truncateQuestion(question), latency,
                                     t1 - t0, t2 - t1, t3 - t2,
                                     System.currentTimeMillis() - t4, retrievedChunks.size());
                             safeComplete.run();
@@ -212,33 +192,76 @@ public class QAService {
         });
     }
 
-    /** 写入一条 SSE 事件 */
-    private void writeSse(java.io.OutputStream out, String event, String data) {
-        try {
-            out.write(("event: " + event + "\ndata: " + data + "\n\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            out.flush();
-        } catch (Exception ignored) {}
-    }
+    // ================================================================
+    // 管线步骤
+    // ================================================================
 
-    private void persistLog(String sid, String question, Long promptTemplateId, Long documentId,
-                            List<String> retrievedChunks, String fullPrompt, String answer, long latency) {
-        try {
-            ChatLog logEntry = new ChatLog();
-            logEntry.setSessionId(sid);
-            logEntry.setPromptTemplateId(promptTemplateId);
-            logEntry.setRagDocumentId(documentId);
-            logEntry.setUserQuestion(question);
-            logEntry.setRetrievedChunks(retrievalService.chunksToJson(retrievedChunks));
-            logEntry.setFullPrompt(fullPrompt);
-            logEntry.setModelResponse(answer);
-            logEntry.setLatencyMs(latency);
-            logEntry.setTotalTokens(answer.length() / 3);
-            chatLogMapper.insert(logEntry);
-        } catch (Exception e) {
-            log.error("对话日志持久化失败", e);
+    /** 加载提示词模板，不存在时抛异常 */
+    private PromptTemplate loadTemplate(Long promptTemplateId) {
+        PromptTemplate template = promptTemplateMapper.selectById(promptTemplateId);
+        if (template == null) {
+            throw new IllegalArgumentException("提示词模板不存在: id=" + promptTemplateId);
         }
+        return template;
     }
 
+    /** 根据模板配置决定检索 topK */
+    private int resolveTopK(PromptTemplate template) {
+        return template.getMaxTokens() != null && template.getMaxTokens() < MAX_TOKENS_THRESHOLD
+                ? TOP_K_SMALL : TOP_K_DEFAULT;
+    }
+
+    /** 构建 Prompt 渲染变量 */
+    private Map<String, String> buildVariables(String question, String context) {
+        Map<String, String> vars = new LinkedHashMap<>(); //构建双向链表
+        vars.put("question", question);
+        vars.put("context", context);
+        return vars;
+    }
+
+    /** 从 ChatResponse 提取文本回答 */
+    private String extractAnswer(ChatResponse response) {
+        return response != null && response.getResult() != null
+                ? response.getResult().getOutput().getText()
+                : "模型未返回有效回答";
+    }
+
+    /** 从流式 ChatResponse 提取单 token */
+    private String extractToken(ChatResponse cr) {
+        return cr.getResult() != null && cr.getResult().getOutput() != null
+                ? cr.getResult().getOutput().getText()
+                : "";
+    }
+
+    // ================================================================
+    // 辅助方法
+    // ================================================================
+
+    private String resolveSessionId(String sessionId) {
+        return (sessionId != null && !sessionId.isEmpty()) ? sessionId : UUID.randomUUID().toString();
+    }
+
+    private String truncateQuestion(String question) {
+        return question.substring(0, Math.min(LOG_QUESTION_MAX_LEN, question.length()));
+    }
+
+    private ChatLog buildChatLog(String sid, String question, Long promptTemplateId, Long documentId,
+                                  List<String> retrievedChunks, String fullPrompt, String answer,
+                                  long latency, int tokens) {
+        ChatLog logEntry = new ChatLog();
+        logEntry.setSessionId(sid);
+        logEntry.setPromptTemplateId(promptTemplateId);
+        logEntry.setRagDocumentId(documentId);
+        logEntry.setUserQuestion(question);
+        logEntry.setRetrievedChunks(retrievalService.chunksToJson(retrievedChunks));
+        logEntry.setFullPrompt(fullPrompt);
+        logEntry.setModelResponse(answer);
+        logEntry.setLatencyMs(latency);
+        logEntry.setTotalTokens(tokens);
+        return logEntry;
+    }
+
+    /** 非流式场景：从 ChatResponse 元数据估算 Token 数 */
     private int estimateTokens(ChatResponse response) {
         try {
             return objectMapper.writeValueAsString(response).length() / 3;
@@ -247,14 +270,41 @@ public class QAService {
         }
     }
 
-    /**
-     * 问答结果 DTO
-     */
-    @lombok.Data
-    public static class QAResult {
-        private String answer;
-        private String sessionId;
-        private List<String> sources;
-        private long latencyMs;
+    // ================================================================
+    // SSE 输出
+    // ================================================================
+
+    private void writeMeta(OutputStream out, String sid, long retrievalMs, List<String> sources) {
+        try {
+            String metaJson = objectMapper.writeValueAsString(
+                    Map.of("sessionId", sid, "retrievalMs", retrievalMs, "sources", sources));
+            writeSse(out, "meta", metaJson);
+        } catch (Exception ignored) {
+        }
     }
+
+    private void writeSse(OutputStream out, String event, String data) {
+        try {
+            out.write(("event: " + event + "\ndata: " + data + "\n\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    // ================================================================
+    // 日志持久化
+    // ================================================================
+
+    private void persistLog(String sid, String question, Long promptTemplateId, Long documentId,
+                            List<String> retrievedChunks, String fullPrompt, String answer, long latency) {
+        try {
+            ChatLog logEntry = buildChatLog(sid, question, promptTemplateId, documentId,
+                    retrievedChunks, fullPrompt, answer, latency, answer.length() / 3);
+            chatLogMapper.insert(logEntry);
+        } catch (Exception e) {
+            log.error("对话日志持久化失败", e);
+        }
+    }
+
 }

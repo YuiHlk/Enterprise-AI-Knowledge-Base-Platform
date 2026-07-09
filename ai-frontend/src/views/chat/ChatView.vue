@@ -48,8 +48,13 @@
             :class="{ active: s.id === sessionId }"
             @click="switchSession(s.id)"
           >
-            <div class="session-name">{{ s.name }}</div>
-            <div class="session-time">{{ s.time }}</div>
+            <div class="session-info">
+              <div class="session-name">{{ s.name }}</div>
+              <div class="session-time">{{ s.time }}</div>
+            </div>
+            <el-icon class="session-delete" :size="14" @click.stop="handleDeleteSession(s.id)">
+              <Delete />
+            </el-icon>
           </div>
         </div>
       </div>
@@ -135,8 +140,8 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
-import { askQuestionStream, getChatHistory } from '../../api/qa'
+import { Delete, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
+import { askQuestionStream, deleteChatHistory, getChatHistory } from '../../api/qa'
 import { pagePromptTemplates } from '../../api/promptTemplate'
 import { pageDocuments } from '../../api/document'
 
@@ -299,6 +304,19 @@ function switchSession(id) {
   loadChatHistory()
 }
 
+async function handleDeleteSession(id) {
+  try {
+    await deleteChatHistory(id)
+  } catch {
+    // 即使服务端删除失败，仍清理本地记录
+  }
+  sessions.value = sessions.value.filter(s => s.id !== id)
+  saveSessions()
+  if (sessionId.value === id) {
+    newSession()
+  }
+}
+
 function updateSessionMeta(lastQuestion) {
   const existing = sessions.value.find(s => s.id === sessionId.value)
   const name = lastQuestion.length > 20 ? lastQuestion.substring(0, 20) + '...' : lastQuestion
@@ -387,6 +405,9 @@ function formatTime(date) {
   border-radius: 4px;
   margin-bottom: 4px;
   transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .session-item:hover {
@@ -402,6 +423,11 @@ function formatTime(date) {
   color: #fff;
 }
 
+.session-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .session-name {
   font-size: 13px;
   color: #303133;
@@ -414,6 +440,30 @@ function formatTime(date) {
   font-size: 11px;
   color: #c0c4cc;
   margin-top: 2px;
+}
+
+.session-delete {
+  color: #c0c4cc;
+  flex-shrink: 0;
+  margin-left: 6px;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  color: #f56c6c;
+}
+
+.session-item.active .session-delete {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.session-item.active .session-delete:hover {
+  color: #fff;
 }
 
 /* ---- 对话区 ---- */

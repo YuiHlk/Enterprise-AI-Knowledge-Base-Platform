@@ -3,6 +3,7 @@ package com.test.qa.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.test.qa.domain.ChatLog;
 import com.test.qa.domain.Result;
+import com.test.qa.dto.QAResult;
 import com.test.qa.mapper.ChatLogMapper;
 import com.test.qa.service.QAService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -42,7 +43,7 @@ public class QAController {
             @Parameter(description = "提示词模板ID") @RequestParam Long promptTemplateId,
             @Parameter(description = "限定文档ID（可选，null=全局搜索）") @RequestParam(required = false) Long documentId,
             @Parameter(description = "会话ID（可选，null=新建会话）") @RequestParam(required = false) String sessionId) {
-        QAService.QAResult result = qaService.ask(question, promptTemplateId, documentId, sessionId);
+        QAResult result = qaService.ask(question, promptTemplateId, documentId, sessionId);
         return Result.success(Map.of(
                 "answer", result.getAnswer(),
                 "sessionId", result.getSessionId(),
@@ -84,5 +85,15 @@ public class QAController {
         wrapper.eq(ChatLog::getSessionId, sessionId)
                 .orderByAsc(ChatLog::getCreateTime);
         return Result.success(chatLogMapper.selectList(wrapper));
+    }
+
+    @DeleteMapping("/delete-chat-history")
+    @Operation(summary = "删除会话历史")
+    public Result<Void> delchatHistory(
+            @Parameter(description = "会话ID") @RequestParam String sessionId) {
+        LambdaQueryWrapper<ChatLog> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ChatLog::getSessionId, sessionId);
+        chatLogMapper.delete(wrapper);
+        return Result.success();
     }
 }
